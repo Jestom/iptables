@@ -3,7 +3,7 @@
 ## 脚本
 
 * 启动脚本  
-  `wget --no-check-certificate -O gost.sh https://raw.githubusercontent.com/Jestom/iptables/master/port_forwarding.sh && chmod +x port_forwarding.sh && ./port_forwarding.sh`  
+  `wget --no-check-certificate -O port_forwarding.sh https://raw.githubusercontent.com/Jestom/iptables/master/port_forwarding.sh && chmod +x port_forwarding.sh && ./port_forwarding.sh`  
 * 再次运行本脚本只需要输入`./port_forwarding.sh`回车即可
 * 运行脚本请使用 root 身份
 
