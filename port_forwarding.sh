@@ -13,37 +13,10 @@ enable_ip_forwarding() {
     echo 1 > /proc/sys/net/ipv4/ip_forward
     sysctl -w net.ipv4.ip_forward=1 > /dev/null
 
-    # 确保 `sysctl.conf` 配置持久化
     if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
         echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
     fi
     sysctl -p > /dev/null
-
-    # 检查是否启用 rc.local，如果存在则添加
-    if [ -f "/etc/rc.local" ]; then
-        if ! grep -q "echo 1 > /proc/sys/net/ipv4/ip_forward" /etc/rc.local; then
-            echo "echo 1 > /proc/sys/net/ipv4/ip_forward" >> /etc/rc.local
-        fi
-        chmod +x /etc/rc.local
-    else
-        # Debian 12+ 使用 systemd 方式
-        cat <<EOF > /etc/systemd/system/ip_forwarding.service
-[Unit]
-Description=Enable IPv4 Forwarding
-After=network.target
-
-[Service]
-Type=oneshot
-ExecStart=/bin/bash -c 'echo 1 > /proc/sys/net/ipv4/ip_forward'
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-        systemctl daemon-reload
-        systemctl enable ip_forwarding
-        systemctl start ip_forwarding
-    fi
 
     read -p "IP 转发已开启，并在重启后自动生效！按回车返回首页..."
 }
@@ -52,24 +25,10 @@ disable_ip_forwarding() {
     echo 0 > /proc/sys/net/ipv4/ip_forward
     sysctl -w net.ipv4.ip_forward=0 > /dev/null
 
-    # 从 sysctl.conf 中移除持久化设置
-    sed -i '/net.ipv4.ip_forward=1/d' /etc/sysctl.conf
+    sed -i '/net.ipv4.ip_forward/d' /etc/sysctl.conf
     sysctl -p > /dev/null
 
-    # 移除 rc.local 配置
-    if [ -f "/etc/rc.local" ]; then
-        sed -i '/echo 1 > \/proc\/sys\/net\/ipv4\/ip_forward/d' /etc/rc.local
-    fi
-
-    # 移除 systemd 服务
-    if [ -f "/etc/systemd/system/ip_forwarding.service" ]; then
-        systemctl stop ip_forwarding
-        systemctl disable ip_forwarding
-        rm -f /etc/systemd/system/ip_forwarding.service
-        systemctl daemon-reload
-    fi
-
-    read -p "IP 转发已关闭，并恢复默认设置。按回车返回首页..."
+    read -p "IP 转发已关闭，系统已恢复默认。按回车返回首页..."
 }
 
 restore_rules() {
@@ -81,7 +40,7 @@ restore_rules() {
     fi
 }
 
-add_forwarding() {
+add_tcp_forwarding() {
     read -p "本机监听 IP: " LOCAL_IP
     read -p "本机监听端口: " LOCAL_PORT
     read -p "目标服务器 IP: " TARGET_IP
@@ -90,12 +49,12 @@ add_forwarding() {
     iptables -t nat -A PREROUTING -d "$LOCAL_IP" -p tcp --dport "$LOCAL_PORT" -j DNAT --to-destination "$TARGET_IP:$TARGET_PORT"
     iptables -t nat -A POSTROUTING -d "$TARGET_IP" -p tcp --dport "$TARGET_PORT" -j MASQUERADE
 
-    read -p "端口转发已添加，按回车返回首页..."
+    read -p "TCP 端口转发已添加，按回车返回首页..."
 }
 
-delete_forwarding() {
-    echo "当前端口转发规则:"
-    iptables -t nat -L PREROUTING --line-numbers -n -v
+delete_tcp_forwarding() {
+    echo "当前 TCP 端口转发规则:"
+    iptables -t nat -L PREROUTING --line-numbers -n -v | grep "tcp"
 
     read -p "请输入要删除的规则编号: " RULE_NUM
     if [[ ! "$RULE_NUM" =~ ^[0-9]+$ ]]; then
@@ -104,7 +63,33 @@ delete_forwarding() {
     fi
 
     iptables -t nat -D PREROUTING "$RULE_NUM"
-    read -p "规则 $RULE_NUM 已删除，按回车返回首页..."
+    read -p "TCP 规则 $RULE_NUM 已删除，按回车返回首页..."
+}
+
+add_udp_forwarding() {
+    read -p "本机监听 IP: " LOCAL_IP
+    read -p "本机监听端口: " LOCAL_PORT
+    read -p "目标服务器 IP: " TARGET_IP
+    read -p "目标服务器端口: " TARGET_PORT
+
+    iptables -t nat -A PREROUTING -d "$LOCAL_IP" -p udp --dport "$LOCAL_PORT" -j DNAT --to-destination "$TARGET_IP:$TARGET_PORT"
+    iptables -t nat -A POSTROUTING -d "$TARGET_IP" -p udp --dport "$TARGET_PORT" -j MASQUERADE
+
+    read -p "UDP 端口转发已添加，按回车返回首页..."
+}
+
+delete_udp_forwarding() {
+    echo "当前 UDP 端口转发规则:"
+    iptables -t nat -L PREROUTING --line-numbers -n -v | grep "udp"
+
+    read -p "请输入要删除的规则编号: " RULE_NUM
+    if [[ ! "$RULE_NUM" =~ ^[0-9]+$ ]]; then
+        read -p "无效输入，请输入正确的规则编号。按回车返回首页..."
+        return
+    fi
+
+    iptables -t nat -D PREROUTING "$RULE_NUM"
+    read -p "UDP 规则 $RULE_NUM 已删除，按回车返回首页..."
 }
 
 view_forwarding() {
@@ -120,27 +105,31 @@ save_rules() {
 
 while true; do
     echo "=============================="
-    echo "1) 添加端口转发"
-    echo "2) 删除端口转发（输入编号删除）"
-    echo "3) 查看端口转发规则"
-    echo "4) 保存规则"
-    echo "5) 恢复规则"
-    echo "6) 安装 iptables"
-    echo "7) 开启 IP 转发（永久生效）"
-    echo "8) 关闭 IP 转发（恢复默认）"
-    echo "9) 退出"
+    echo "1) 添加 TCP 端口转发"
+    echo "2) 删除 TCP 端口转发"
+    echo "3) 添加 UDP 端口转发"
+    echo "4) 删除 UDP 端口转发"
+    echo "5) 查看端口转发规则"
+    echo "6) 保存规则"
+    echo "7) 恢复规则"
+    echo "8) 安装 iptables"
+    echo "9) 开启 IP 转发（永久生效）"
+    echo "10) 关闭 IP 转发（恢复默认）"
+    echo "11) 退出"
     echo "=============================="
-    read -p "选择操作 (1-9): " choice
+    read -p "选择操作 (1-11): " choice
     case $choice in
-        1) add_forwarding ;;
-        2) delete_forwarding ;;
-        3) view_forwarding ;;
-        4) save_rules ;;
-        5) restore_rules ;;
-        6) install_iptables ;;
-        7) enable_ip_forwarding ;;
-        8) disable_ip_forwarding ;;
-        9) exit 0 ;;
+        1) add_tcp_forwarding ;;
+        2) delete_tcp_forwarding ;;
+        3) add_udp_forwarding ;;
+        4) delete_udp_forwarding ;;
+        5) view_forwarding ;;
+        6) save_rules ;;
+        7) restore_rules ;;
+        8) install_iptables ;;
+        9) enable_ip_forwarding ;;
+        10) disable_ip_forwarding ;;
+        11) exit 0 ;;
         *) read -p "无效输入，请重新选择。按回车返回首页..." ;;
     esac
 done
