@@ -85,6 +85,15 @@ add_udp_forwarding() {
     inner_add_forwarding
 }
 
+view_forwarding() {
+    echo "====== IPv4 转发规则 ======"
+    iptables -t nat -L PREROUTING --line-numbers -n -v
+    echo
+    echo "====== IPv6 转发规则 ======"
+    ip6tables -t nat -L PREROUTING --line-numbers -n -v
+    read -p "按回车返回首页..."
+}
+
 # 其他函数保持不变
 
 while true; do
